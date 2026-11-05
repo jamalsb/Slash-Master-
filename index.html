@@ -1,348 +1,137 @@
-
 <!DOCTYPE html>
-<html>
+<html lang="ur">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <title>Slash Master</title>
-
 <style>
-html,body{
-  margin:0;height:100%;overflow:hidden;
-  background:#1a1025;font-family:sans-serif;
-  touch-action:none
-}
-canvas{display:block}
-#ui{
-  position:fixed;top:10px;left:10px;color:#fff;
-  font-size:28px;font-weight:bold;
-  text-shadow:2px 2px 4px #000
-}
-#combo{
-  position:fixed;top:50px;left:10px;
-  color:#ffd700;font-size:22px;font-weight:bold
-}
-#start,#over{
-  position:fixed;inset:0;display:flex;
-  flex-direction:column;align-items:center;
-  justify-content:center;color:#fff;
-  background:rgba(0,0,0,.7)
-}
-#over{display:none}
-#start h1{font-size:48px;color:#ff5588;text-align:center}
-button{
-  font-size:28px;padding:12px 40px;
-  cursor:pointer;border:none;border-radius:10px;
-  background:#ff5588;color:#fff
-}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:#1a1025;font-family:sans-serif;touch-action:none;-webkit-user-select:none;user-select:none}
+canvas{display:block;position:fixed;inset:0}
+.hud{position:fixed;color:#fff;text-shadow:2px 2px 4px #000;font-weight:bold;pointer-events:none}
+#score{top:10px;left:12px;font-size:26px}
+#lives{top:44px;left:12px;font-size:20px}
+#level{top:74px;left:12px;font-size:16px;color:#9fd}
+#best{top:10px;right:12px;font-size:16px;color:#ffd700}
+.btn{position:fixed;right:12px;width:44px;height:44px;border:none;border-radius:10px;background:rgba(255,255,255,.15);color:#fff;font-size:20px;cursor:pointer}
+#pauseBtn{top:40px}
+#muteBtn{top:90px}
+.ov{position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,.72);color:#fff;text-align:center;padding:20px}
+.ov.on{display:flex}
+h1{font-size:44px;color:#ff5588;margin:0 0 10px}
+p{font-size:18px;margin:6px 0;color:#ddd}
+button.play{font-size:26px;padding:12px 40px;margin-top:16px;border:none;border-radius:12px;background:#ff5588;color:#fff;cursor:pointer}
 </style>
 </head>
-
 <body>
 
 <canvas id="c"></canvas>
+<div class="hud" id="score">Score: 0</div>
+<div class="hud" id="lives"></div>
+<div class="hud" id="level"></div>
+<div class="hud" id="best"></div>
+<button class="btn" id="pauseBtn" onclick="togglePause()">⏸</button>
+<button class="btn" id="muteBtn" onclick="toggleMute()">🔊</button>
 
-<div id="ui">
-  Score: <span id="score">0</span> |
-  Lives: <span id="lives">❤❤❤</span>
-</div>
-
-<div id="combo"></div>
-
-<div id="start">
+<div class="ov on" id="start">
   <h1>🍉 Slash Master 🔪</h1>
-  <button onclick="startGame()">PLAY</button>
+  <p>فروٹ کاٹیں، 💣 سے بچیں، ⭐ سے بونس لیں</p>
+  <p>انگلی یا ماؤس سے سوائپ کریں</p>
+  <button class="play" onclick="startGame()">PLAY</button>
 </div>
 
-<div id="over">
-  <h1 id="final"></h1>
-  <button onclick="startGame()">RETRY</button>
+<div class="ov" id="pause">
+  <h1>⏸ Paused</h1>
+  <button class="play" onclick="togglePause()">RESUME</button>
+</div>
+
+<div class="ov" id="over">
+  <h1>Game Over</h1>
+  <p id="final"></p>
+  <p id="newBest"></p>
+  <button class="play" onclick="startGame()">RETRY</button>
 </div>
 
 <script>
-const c=document.getElementById('c');
-const x=c.getContext('2d');
-
-let W,H;
-
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+let W,H,R;
 function fit(){
-  W=c.width=innerWidth;
-  H=c.height=innerHeight;
+  W=cv.width=innerWidth;
+  H=cv.height=innerHeight;
+  R=Math.max(30,Math.min(46,Math.min(W,H)*0.07));
 }
 fit();
-onresize=fit;
+addEventListener('resize',fit);
 
-let fruits=[],parts=[],score=0,lives=3;
-let running=false,trail=[],cutCount=0;
-let comboT=0,comboMsg='';
-let loopOn=false,last=null,down=false;
+const $=id=>document.getElementById(id);
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const show=(id,on)=>$(id).classList.toggle('on',!!on);
 
-// SOUND SYSTEM
-let audioCtx=null;
+/* ================= SOUND (fully procedural, no files) ================= */
+let ac=null,master=null,noiseBuf=null,muted=false;
 
 function initAudio(){
-  if(!audioCtx){
-    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  if(!ac){
+    ac=new (window.AudioContext||window.webkitAudioContext)();
+    master=ac.createGain();
+    master.gain.value=0.7;
+    master.connect(ac.destination);
+    noiseBuf=ac.createBuffer(1,ac.sampleRate*0.6,ac.sampleRate);
+    const d=noiseBuf.getChannelData(0);
+    for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
   }
-  if(audioCtx.state==='suspended'){
-    audioCtx.resume();
-  }
+  if(ac.state==='suspended')ac.resume();
 }
 
-function playSound(type){
-  if(!audioCtx)return;
-
-  const now=audioCtx.currentTime;
-  const osc=audioCtx.createOscillator();
-  const gain=audioCtx.createGain();
-
-  osc.connect(gain);
-  gain.connect(audioCtx.destination);
-
-  if(type==='cut'){
-    osc.type='sawtooth';
-    osc.frequency.setValueAtTime(650,now);
-    osc.frequency.exponentialRampToValueAtTime(250,now+0.12);
-
-    gain.gain.setValueAtTime(0.12,now);
-    gain.gain.exponentialRampToValueAtTime(0.001,now+0.12);
-
-    osc.start(now);
-    osc.stop(now+0.12);
-  }
-
-  if(type==='over'){
-    osc.type='triangle';
-    osc.frequency.setValueAtTime(350,now);
-    osc.frequency.exponentialRampToValueAtTime(100,now+0.6);
-
-    gain.gain.setValueAtTime(0.15,now);
-    gain.gain.exponentialRampToValueAtTime(0.001,now+0.6);
-
-    osc.start(now);
-    osc.stop(now+0.6);
-  }
+function tone(f1,f2,dur,type,vol,delay=0){
+  if(!ac||muted)return;
+  const s=ac.currentTime+delay;
+  const o=ac.createOscillator(),g=ac.createGain();
+  o.type=type;
+  o.frequency.setValueAtTime(f1,s);
+  if(f2)o.frequency.exponentialRampToValueAtTime(f2,s+dur);
+  g.gain.setValueAtTime(0.0001,s);
+  g.gain.exponentialRampToValueAtTime(vol,s+0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001,s+dur);
+  o.connect(g);g.connect(master);
+  o.start(s);o.stop(s+dur+0.05);
 }
 
-const EMO=['🍎','🍊','🍋','🍉','🍇','🍓','🥝','🍍'];
-const rnd=(a,b)=>a+Math.random()*(b-a);
-
-// SLOWER FRUIT
-function spawn(){
-  const e=EMO[Math.random()*EMO.length|0];
-
-  fruits.push({
-    e,
-    x:rnd(W*.15,W*.85),
-    y:H+40,
-    vx:rnd(-2,2),
-    vy:rnd(-13,-10),
-    r:34,
-    rot:0,
-    vr:rnd(-.08,.08),
-    cut:false
-  });
+function noise(dur,filterType,f1,f2,vol,delay=0){
+  if(!ac||muted)return;
+  const s=ac.currentTime+delay;
+  const src=ac.createBufferSource();
+  src.buffer=noiseBuf;
+  const fl=ac.createBiquadFilter();
+  fl.type=filterType;
+  fl.Q.value=1;
+  fl.frequency.setValueAtTime(f1,s);
+  if(f2)fl.frequency.exponentialRampToValueAtTime(f2,s+dur);
+  const g=ac.createGain();
+  g.gain.setValueAtTime(vol,s);
+  g.gain.exponentialRampToValueAtTime(0.0001,s+dur);
+  src.connect(fl);fl.connect(g);g.connect(master);
+  src.start(s,Math.random()*0.3);
+  src.stop(s+dur+0.05);
 }
 
-function startGame(){
-  initAudio();
-
-  score=0;
-  lives=3;
-  fruits=[];
-  parts=[];
-  trail=[];
-  cutCount=0;
-  comboT=0;
-  running=true;
-
-  document.getElementById('start').style.display='none';
-  document.getElementById('over').style.display='none';
-
-  upd();
-
-  if(!loopOn){
-    loopOn=true;
-    tick();
-  }
-}
-
-function upd(){
-  document.getElementById('score').textContent=score;
-  document.getElementById('lives').textContent='❤'.repeat(lives)||'—';
-}
-
-function burst(px,py,e){
-  for(let i=0;i<14;i++){
-    parts.push({
-      x:px,y:py,
-      vx:rnd(-6,6),
-      vy:rnd(-8,2),
-      life:1,e
-    });
-  }
-}
-
-function tick(){
-  requestAnimationFrame(tick);
-
-  x.fillStyle='rgba(26,16,37,.35)';
-  x.fillRect(0,0,W,H);
-
-  if(running){
-
-    // SLOWER SPAWNING
-    if(Math.random()<0.018)spawn();
-
-    for(const f of fruits){
-      f.x+=f.vx;
-      f.y+=f.vy;
-
-      // SLOWER GRAVITY
-      f.vy+=0.25;
-
-      f.rot+=f.vr;
-
-      x.save();
-      x.translate(f.x,f.y);
-      x.rotate(f.rot);
-      x.font=f.r*2+'px serif';
-      x.textAlign='center';
-      x.textBaseline='middle';
-      x.fillText(f.e,0,0);
-      x.restore();
-
-      if(f.y>H+80&&!f.cut&&!f.dead){
-        f.dead=true;
-        lives--;
-        upd();
-
-        if(lives<=0)gameOver();
-      }
-    }
-
-    fruits=fruits.filter(f=>!f.dead&&!f.cut);
-  }
-
-  // PARTICLES
-  for(const p of parts){
-    p.x+=p.vx;
-    p.y+=p.vy;
-    p.vy+=0.3;
-    p.life-=0.03;
-
-    x.globalAlpha=Math.max(p.life,0);
-    x.font='30px serif';
-    x.fillText(p.e,p.x,p.y);
-    x.globalAlpha=1;
-  }
-
-  parts=parts.filter(p=>p.life>0);
-
-  // SLASH TRAIL
-  x.strokeStyle='#fff';
-  x.lineWidth=4;
-  x.lineCap='round';
-  x.shadowColor='#8ff';
-  x.shadowBlur=12;
-
-  x.beginPath();
-
-  for(let i=0;i<trail.length;i++){
-    i?x.lineTo(trail[i].x,trail[i].y):
-      x.moveTo(trail[i].x,trail[i].y);
-  }
-
-  x.stroke();
-  x.shadowBlur=0;
-
-  if(trail.length>12)trail.shift();
-
-  // COMBO
-  if(comboT>0){
-    comboT-=0.02;
-    x.globalAlpha=comboT;
-    x.fillStyle='#ffd700';
-    x.font='40px bold sans-serif';
-    x.textAlign='center';
-    x.fillText(comboMsg,W/2,120);
-    x.globalAlpha=1;
-  }
-}
-
-function slice(px,py){
-  for(const f of fruits){
-
-    if(!f.cut&&Math.hypot(f.x-px,f.y-py)<f.r+10){
-
-      f.cut=true;
-      burst(f.x,f.y,f.e);
-
-      score++;
-      cutCount++;
-
-      // CUT SOUND
-      playSound('cut');
-
-      upd();
-
-      if(cutCount%5===0){
-        comboMsg='COMBO x'+(cutCount/5)+'! 🔥';
-        comboT=1;
-      }
-    }
-  }
-}
-
-function pos(t){
-  return{x:t.clientX,y:t.clientY};
-}
-
-onpointerdown=e=>{
-  down=true;
-  last=pos(e);
-  trail=[last];
+const SFX={
+  swoosh(){noise(0.2,'bandpass',600,2800,0.45)},
+  splat(){noise(0.2,'lowpass',1800,300,0.7);tone(220,60,0.18,'sine',0.5)},
+  bomb(){tone(140,30,0.6,'sawtooth',0.3);noise(0.7,'lowpass',500,80,0.8)},
+  miss(){tone(330,120,0.35,'sine',0.25)},
+  gold(){[880,1175,1480,1760].forEach((f,i)=>tone(f,f,0.18,'triangle',0.25,i*0.06))},
+  combo(){[523,659,784,1047].forEach((f,i)=>tone(f,f,0.15,'square',0.08,i*0.05))},
+  over(){[392,330,262,196].forEach((f,i)=>tone(f,f*0.98,0.35,'triangle',0.3,i*0.25))},
+  start(){tone(400,800,0.2,'triangle',0.2)},
+  pause(){tone(600,600,0.08,'sine',0.2)}
 };
 
-onpointermove=e=>{
-  if(!down)return;
-
-  const p=pos(e);
-
-  if(last&&Math.hypot(p.x-last.x,p.y-last.y)>6){
-    slice(p.x,p.y);
-  }
-
-  trail.push(p);
-  last=p;
-};
-
-onpointerup=()=>{
-  down=false;
-  last=null;
-};
-
-onpointercancel=()=>{
-  down=false;
-  last=null;
-};
-
-function gameOver(){
-  if(!running)return;
-
-  running=false;
-
-  // GAME OVER SOUND
-  playSound('over');
-
-  document.getElementById('final').textContent=
-    'Game Over! Score: '+score;
-
-  document.getElementById('over').style.display='flex';
+function toggleMute(){
+  muted=!muted;
+  $('muteBtn').textContent=muted?'🔇':'🔊';
 }
 
-tick();
-</script>
-
-</body>
-</html>
+/* ================= GAME DATA ================= */
+const FRUITS=[
+  {e:'🍎',c:'#e74c3c'},{
